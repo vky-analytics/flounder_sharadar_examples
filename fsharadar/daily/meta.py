@@ -8,10 +8,6 @@ from zipline.pipeline.data.dataset import Column, DataSet, DataSetMeta
 bundle_name = "flounder-sharadar-daily"
 bundle_tags = ['marketcap', 'ev', 'evebit', 'evebitda', 'pb', 'pe', 'ps']
 
-bundle_missing_value = np.iinfo(np.uint32).max
-float_to_int_factor = 1000
-int_to_float_factor = 0.001
-
 class FundamentalsMeta(DataSetMeta):
     
     def __new__(cls, name, bases, dct):

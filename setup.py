@@ -10,7 +10,7 @@ from Cython.Build import cythonize
 from Cython.Distutils import build_ext 
 
 ext_modules = [
-    Extension('fsharadar.daily.cython_read_int64', ['fsharadar/daily/cython_read_int64.pyx'], include_dirs=[numpy.get_include()]),
+    Extension('fsharadar.cython_read_float64', ['fsharadar/cython_read_float64.pyx'], include_dirs=[numpy.get_include()]),
     ]
 
 setup(

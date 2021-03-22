@@ -1,6 +1,6 @@
 # cython-based interface for reading the bcolz bundle
 # implemented from the corresponding method within
-# zipline/data/_equities.pyx for supporting int64 values
+# zipline/data/_equities.pyx for supporting float64 values
 # and sharadar daily tags.
 
 import bcolz
@@ -27,11 +27,7 @@ from numpy cimport (
 )
 from numpy.math cimport NAN
 
-from fsharadar.daily.meta import (
-     bundle_tags,
-     bundle_missing_value,
-     int_to_float_factor,
-)
+from fsharadar.defs import bundle_missing_value
 
 ctypedef object carray_t
 ctypedef object ctable_t
@@ -47,7 +43,8 @@ cpdef _read_bcolz_data(ctable_t table,
                        intp_t[:] first_rows,
                        intp_t[:] last_rows,
                        intp_t[:] offsets,
-                       bool read_all):
+                       bool read_all,
+		       bundle_tags): # new argument
     """
     Load raw bcolz data for the given columns and indices.
 
@@ -77,8 +74,8 @@ cpdef _read_bcolz_data(ctable_t table,
         int nassets
         str column_name
         carray_t carray
-        ndarray[dtype=int64_t, ndim=1] raw_data
-        ndarray[dtype=int64_t, ndim=2] outbuf
+        ndarray[dtype=float64_t, ndim=1] raw_data
+        ndarray[dtype=float64_t, ndim=2] outbuf
         ndarray[dtype=uint8_t, ndim=2, cast=True] where_nan
         ndarray[dtype=float64_t, ndim=2] outbuf_as_float
         intp_t asset
@@ -95,7 +92,7 @@ cpdef _read_bcolz_data(ctable_t table,
         raise ValueError("Incompatible index arrays.")
 
     for column_name in columns:
-        outbuf = zeros(shape=shape, dtype=int64)
+        outbuf = zeros(shape=shape, dtype=float64)
         if read_all:
             raw_data = table[column_name][:]
 
@@ -133,7 +130,7 @@ cpdef _read_bcolz_data(ctable_t table,
                     continue
 
         if column_name in set(bundle_tags):
-            outbuf_as_float = outbuf.astype(float64) * int_to_float_factor
+            outbuf_as_float = outbuf.astype(float64) 
             where_nan = (outbuf_as_float == bundle_missing_value)
             outbuf_as_float[where_nan] = NAN
             results.append(outbuf_as_float)

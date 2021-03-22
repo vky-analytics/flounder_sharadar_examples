@@ -1,6 +1,6 @@
 # SharadarDailyBcolzWriter class derived from BcolzDailyBarWriter
-# within zipline/data/bcolz_daily_bars.py for supporting int64 values
-# and sharadar daily tags.
+# within zipline/data/bcolz_daily_bars.py for supporting float64 values
+# and sharadar sep tags.
 
 
 import numpy as np
@@ -32,24 +32,25 @@ from zipline.utils.numpy_utils import iNaT, float64_dtype, int64_dtype
 from zipline.utils.cli import maybe_show_progress
 from zipline.data.bcolz_daily_bars import BcolzDailyBarWriter
 
-from fsharadar.daily.meta import bundle_tags, bundle_missing_value, float_to_int_factor
+from fsharadar.defs import bundle_max_value, bundle_missing_value
 
-BUNDLE_TAGS = frozenset(bundle_tags)
-BCOLZ_COLUMNS = tuple(bundle_tags + ['day', 'id'])
+# from fsharadar.sep.meta import bundle_tags
+# BUNDLE_TAGS = frozenset(bundle_tags)
+# BCOLZ_COLUMNS = tuple(bundle_tags + ['day', 'id'])
 
 # UINT32_MAX = iinfo(np.uint32).max
 
-def check_int64_safe(value, colname):
-    if value > bundle_missing_value: #  UINT32_MAX
+def check_float64_safe(value, colname):
+    if value > bundle_max_value: #  UINT32_MAX
         raise ValueError(
             "Value %s from column '%s' is too large" % (value, colname)
         )
 
 @expect_element(invalid_data_behavior={'warn', 'raise', 'ignore'})
-def winsorise_int64(df, invalid_data_behavior, *columns):
+def winsorise_float64(df, invalid_data_behavior, *columns):
 
     columns = list(columns)
-    mask = df[columns] > bundle_missing_value # UINT32_MAX
+    mask = df[columns] > bundle_max_value # UINT32_MAX
 
     if invalid_data_behavior != 'ignore':
         mask |= df[columns].isnull()
@@ -62,14 +63,14 @@ def winsorise_int64(df, invalid_data_behavior, *columns):
     if mv.any():
         if invalid_data_behavior == 'raise':
             raise ValueError(
-                '%d values out of bounds for int64: %r' % (
+                '%d values out of bounds for float64: %r' % (
                     mv.sum(), df[mask.any(axis=1)],
                 ),
             )
         if invalid_data_behavior == 'warn':
             warnings.warn(
                 'Ignoring %d values because they are out of bounds for'
-                ' int64: %r' % (
+                ' float64: %r' % (
                     mv.sum(), df[mask.any(axis=1)],
                 ),
                 stacklevel=3,  # one extra frame for `expect_element`
@@ -81,8 +82,11 @@ def winsorise_int64(df, invalid_data_behavior, *columns):
 
 class SharadarDailyBcolzWriter(BcolzDailyBarWriter):
     
-    def __init__(self, filename, calendar, start_session, end_session):
+    def __init__(self, filename, calendar, start_session, end_session, bundle_tags):
         BcolzDailyBarWriter.__init__(self, filename, calendar, start_session, end_session)
+
+        self.bundle_tags = frozenset(bundle_tags)
+        self.bcolz_columns = tuple(bundle_tags + ['day', 'id'])
 
     def write(self,
               data,
@@ -110,13 +114,14 @@ class SharadarDailyBcolzWriter(BcolzDailyBarWriter):
             # we already have a ctable so do nothing
             return raw_data
 
-        winsorise_int64(raw_data, invalid_data_behavior, *BUNDLE_TAGS)
-        processed = (raw_data[list(BUNDLE_TAGS)] * float_to_int_factor).round().astype('int64')
+        winsorise_float64(raw_data, invalid_data_behavior, *self.bundle_tags)
+        processed = raw_data[list(self.bundle_tags)]
         dates = raw_data.index.values.astype('datetime64[s]')
-        check_int64_safe(dates.max().view(np.int64), 'day')
-        processed['day'] = dates.astype('int64')
+        check_float64_safe(dates.max().view(np.float64), 'day')
+        processed['day'] = dates.astype('float64')
+
         return ctable.fromdataframe(processed)
-    
+
     
     def _write_internal(self, iterator, assets):
   
@@ -127,8 +132,8 @@ class SharadarDailyBcolzWriter(BcolzDailyBarWriter):
 
         # Maps column name -> output carray.
         columns = {
-            k: carray(array([], dtype=int64_dtype))
-            for k in BCOLZ_COLUMNS
+            k: carray(array([], dtype=float64_dtype))
+            for k in self.bcolz_columns # BCOLZ_COLUMNS
         }
 
         earliest_date = None
@@ -151,7 +156,7 @@ class SharadarDailyBcolzWriter(BcolzDailyBarWriter):
                     # We know what the content of this column is, so don't
                     # bother reading it.
                     columns['id'].append(
-                        full((nrows,), asset_id, dtype='int64'),
+                        full((nrows,), asset_id, dtype='float64'),
                     )
                     continue
 
@@ -216,9 +221,9 @@ class SharadarDailyBcolzWriter(BcolzDailyBarWriter):
         full_table = ctable(
             columns=[
                 columns[colname]
-                for colname in BCOLZ_COLUMNS
+                for colname in self.bcolz_columns # BCOLZ_COLUMNS
             ],
-            names=BCOLZ_COLUMNS,
+            names=self.bcolz_columns, # BCOLZ_COLUMNS
             rootdir=self._filename,
             mode='w',
         )

@@ -23,51 +23,38 @@ from zipline.assets import AssetDBWriter, AssetFinder
 from zipline.data.bundles import UnknownBundle
 from zipline.data.bundles import bundles, register
 from zipline.data.bundles import to_bundle_ingest_dirname
-from zipline.data.bundles.core import cache_path, daily_equity_relative, asset_db_relative
 
-from fsharadar.daily.meta import bundle_name, bundle_tags, bundle_missing_value
-from fsharadar.daily.bcolz_writer_int64 import SharadarDailyBcolzWriter
+from zipline.data.bundles.core import (
+    cache_path,
+    daily_equity_relative,
+    asset_db_relative
+)
 
-def parse_pricing_and_vol(data,
-                          sessions,
-                          symbol_map):
-    for asset_id, symbol in iteritems(symbol_map):
-        asset_data = data.xs(
-            symbol,
-            level=1
-        ).reindex(
-            sessions.tz_localize(None)
-        ).fillna(bundle_missing_value) # 0.0
-        yield asset_id, asset_data
+from fsharadar.ingest import (
+    parse_pricing_and_vol,
+    get_ticker_sids,
+    get_asset_metadata,
+    get_exchanges,
+)
 
-def gen_asset_metadata(data, show_progress):
+from fsharadar.bcolz_writer_float64 import SharadarDailyBcolzWriter
 
-    data = data.groupby(
-        by='symbol'
-    ).agg(
-        {'date': [np.min, np.max]}
-    )
-    data.reset_index(inplace=True)
-    data['start_date'] = data.date.amin
-    data['end_date'] = data.date.amax
-    del data['date']
-    data.columns = data.columns.get_level_values(0)
+from fsharadar.daily.meta import bundle_name, bundle_tags
 
-    # data['exchange'] = 'QUANDL'
-    data['auto_close_date'] = data['end_date'].values + pd.Timedelta(days=1)
-    return data
+def read_daily_file(daily_file, tickers_df):
 
-def get_ticker_sids(tickers_df):
-    tickers_dropna = tickers_df.dropna(subset=['ticker'])
-    ticker_sids = pd.DataFrame(index=tickers_dropna.ticker.unique())
-    ticker_sids['sid'] = tickers_dropna.groupby('ticker').apply(lambda x: x.permaticker.values[0])
-    return ticker_sids
+    # read sep file
+    usecols = ['ticker', 'date'] + bundle_tags
+    raw_data = pd.read_csv(daily_file, parse_dates=['date'], usecols=usecols)
+    raw_data.rename(columns={'ticker': 'symbol'}, inplace=True)
 
-def get_ticker_exchanges(tickers_df):
-    tickers_dropna = tickers_df.dropna(subset=['ticker'])
-    ticker_exchanges = pd.DataFrame(index=tickers_dropna.ticker.unique())
-    ticker_exchanges['exchange'] = tickers_dropna.groupby('ticker').apply(lambda x: x.exchange.values[0])
-    return ticker_exchanges
+    # remove assets without sids
+    all_tickers = tickers_df.ticker.unique()
+    common_tickers = list(set(raw_data.symbol.unique()) & set(all_tickers))
+    raw_data = raw_data.query('symbol in @common_tickers')
+    
+    return raw_data
+
 
 @register(bundle_name, create_writers=True)
 def ingest_sharadar_daily(environ,
@@ -81,47 +68,28 @@ def ingest_sharadar_daily(environ,
                           cache,
                           show_progress,
                           output_dir,
-                          sharadar_tickers_file, # new argument
-                          sharadar_daily_file): # new argument
+                          tickers_file, # new argument
+                          daily_file): # new argument
 
     # read tickers_file
-    tickers_df = pd.read_csv(sharadar_tickers_file)
+    tickers_df = pd.read_csv(tickers_file)
 
     # read daily_file
-    usecols = ['ticker', 'date'] + bundle_tags
-    raw_data = pd.read_csv(sharadar_daily_file, parse_dates=['date'], usecols=usecols)
-    raw_data.rename(columns={'ticker': 'symbol'}, inplace=True)
-    
-    # generate metadata
-    asset_metadata = gen_asset_metadata(
-        raw_data[['symbol', 'date']],
-        show_progress=True
-    )
-
-    # add sids from tickers_file
-    ticker_sids = get_ticker_sids(tickers_df)
-    asset_metadata = asset_metadata.join(ticker_sids, on='symbol')
-    asset_metadata.dropna(inplace=True) # yes, there was one missing symbol in tickers_file
-    asset_metadata['sid'] = asset_metadata.sid.astype(int)
-    asset_metadata.set_index('sid', inplace=True)
-        
-    # add exchanges from tickers_file
-    ticker_exchanges = get_ticker_exchanges(tickers_df)
-    asset_metadata = asset_metadata.join(ticker_exchanges, on='symbol')
-
-    asset_metadata_exchanges = asset_metadata.exchange.unique()
-    exchanges = pd.DataFrame(asset_metadata_exchanges, columns=['exchange'])
-    exchanges['canonical_name'] = asset_metadata_exchanges
-    exchanges['country_code'] = 'US'
+    raw_data = read_daily_file(daily_file, tickers_df)
 
     # write metadata
+    asset_metadata = get_asset_metadata(raw_data[['symbol', 'date']], tickers_df)
+    exchanges = get_exchanges(asset_metadata)
+  
     asset_db_writer.write(asset_metadata, exchanges=exchanges)
 
     # write raw data
+    
+    raw_data.set_index(['date', 'symbol'], inplace=True)
+    
     symbol_map = asset_metadata.symbol
     sessions = calendar.sessions_in_range(start_session, end_session)
     
-    raw_data.set_index(['date', 'symbol'], inplace=True)
     daily_bar_writer.write(
         parse_pricing_and_vol(
             raw_data,
@@ -131,7 +99,7 @@ def ingest_sharadar_daily(environ,
         show_progress=show_progress
     )
 
-def ingest(tickers_file=None, daily_file=None): # new arguments of bundle.ingest
+def ingest(tickers_file=None, data_file=None): # new arguments of bundle.ingest
 
     # original argumenets
     
@@ -185,6 +153,7 @@ def ingest(tickers_file=None, daily_file=None): # new arguments of bundle.ingest
             calendar,
             start_session,
             end_session,
+            bundle_tags, # new argument
         )
                 
         # Do an empty write to ensure that the daily ctables exist
@@ -213,7 +182,7 @@ def ingest(tickers_file=None, daily_file=None): # new arguments of bundle.ingest
                 show_progress,
                 pth.data_path([name, timestr], environ=environ,),
                 tickers_file,
-                daily_file
+                data_file
         )
 
 

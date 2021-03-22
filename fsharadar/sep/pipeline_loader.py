@@ -20,9 +20,8 @@ class PipelineLoader(implements(PipelineLoader)):
     """
 
     def __init__(self, bundle_data):
-        
+      
         self.raw_reader = bundle_data.equity_daily_bar_reader
-
 
     def load_adjusted_array(self, domain, columns, dates, sids, mask):
         # load_adjusted_array is called with dates on which the user's algo
