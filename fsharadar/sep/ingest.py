@@ -76,9 +76,53 @@ def read_actions_file(actions_file, tickers_df):
     actions_df = actions_df.query('symbol in @common_tickers')
 
     return actions_df
+
+'''
+def create_sessions_df():
     
+    bundle = bundles[bundle_name]
+    
+    calendar = get_calendar(bundle.calendar_name)
+    start_session = calendar.first_session
+    end_session = calendar.last_session
+    sessions = calendar.sessions_in_range(start_session, end_session)
+    
+    sessions_df = pd.DataFrame(index=sessions.tz_localize(None))
+    sessions_df = sessions_df.sort_index(ascending=False)
+    
+    return sessions_df
+'''
+
+def create_date_range_df():
+    bundle = bundles[bundle_name]
+    
+    calendar = get_calendar(bundle.calendar_name)
+    start_session = calendar.first_session
+    end_session = calendar.last_session
+
+    date_range = pd.date_range(start=start_session, end=end_session)
+    
+    date_range_df = pd.DataFrame(index=date_range.tz_localize(None))
+    date_range_df = date_range_df.sort_index(ascending=False)
+    
+    return date_range_df    
+    
+def calc_dividend_ratios(unadj_xs):
+    
+    unadj_xs = unadj_xs.sort_index(ascending=False)
+    
+    closes = unadj_xs['close']
+    dividends = unadj_xs['dividends'].shift(1)
+    dividends[0] = 0.0
+    
+    dividend_ratios = (1. - dividends/closes)
+    
+    return dividend_ratios
 
 def unadjust_splits(sep_df, actions_df):
+    
+    # some splits in actions_df are located in non-business days
+    sessions_df = create_date_range_df() # create_sessions_df()
 
     actions_mi =  actions_df.set_index(['symbol', 'date'])
     actions_mi.sort_index(level=0, inplace=True)
@@ -89,29 +133,37 @@ def unadjust_splits(sep_df, actions_df):
     
     tickers = sep_df.symbol.unique()
     dfs = []
+    dfs_keys = []
 
     for i, ticker in enumerate(tickers):
     
         sep_xs = sep_mi.xs(ticker)
         sep_xs = sep_xs.sort_index(ascending=False)
+        # sep_xs.index = sep_xs.index.tz_localize('UTC')
     
         if ticker not in action_tickers:
+            dfs_keys.append(ticker)
             dfs.append(sep_xs)
             continue
 
         # select splits
         actions_xs = actions_mi.xs(ticker)
         actions_xs = actions_xs.sort_index(ascending=False)
+        # actions_xs.index = actions_xs.index.tz_localize('UTC')
         splits = actions_xs[actions_xs.action == 'split'].value  
+        
+        # calculate split factor
+        session_splits = sessions_df.join(splits, how='left')
+        session_splits = session_splits.sort_index(ascending=False)
+        session_splits = session_splits.rename(columns={'value': 'split_ratio'})
+        
+        session_splits['split_ratio'] = session_splits['split_ratio'].shift(1)
+        session_splits['split_ratio'] = session_splits['split_ratio'].replace(np.nan, 1.0)
+        session_splits['split_factor'] = session_splits['split_ratio'].cumprod()
 
         # add splits to the sep frame
-        sep_xs = sep_xs.join(splits, how='left')
-        sep_xs = sep_xs.rename(columns={'value': 'split_ratio'})
-
-        # calculate split factor
-        sep_xs['split_ratio'] = sep_xs['split_ratio'].shift(1)
-        sep_xs['split_ratio'] = sep_xs['split_ratio'].replace(np.nan, 1.0)
-        sep_xs['split_factor'] = sep_xs['split_ratio'].cumprod()
+        sep_xs = sep_xs.join(session_splits, how='left')
+        sep_xs = sep_xs.sort_index(ascending=False)
 
         # apply split factor to prices
         for field in ['close', 'open', 'high', 'low', 'dividends']:
@@ -121,12 +173,24 @@ def unadjust_splits(sep_df, actions_df):
         sep_xs['volume'] = sep_xs['volume']/sep_xs['split_factor']
     
         sep_xs.drop(['split_ratio', 'split_factor'], axis=1, inplace=True)
+        
+        # remove tickers with negative dividend ratios
+        dividend_ratios = calc_dividend_ratios(sep_xs)
+    
+        neg_dividend_ratios = (dividend_ratios < 0).sum()
+        if neg_dividend_ratios > 0:
+            continue
+        
+        dfs_keys.append(ticker)
         dfs.append(sep_xs)
+ 
 
-    unadj_df = pd.concat(dfs, keys=tickers)
+    unadj_df = pd.concat(dfs, keys=dfs_keys)
     unadj_df = unadj_df.reset_index()
     unadj_df.rename(columns={'level_0': 'symbol'}, inplace=True)
+    
     return unadj_df
+
 
 def get_dividends(unadj_data, tickers_df):
     
@@ -202,8 +266,8 @@ def ingest_sharadar_daily(environ,
     actions_df = read_actions_file(actions_file, tickers_df)
 
     # unadjust splits
-    # unadj_data = unadjust_splits(raw_data, actions_df)
-    unadj_data = raw_data
+    unadj_data = unadjust_splits(raw_data, actions_df)
+    # unadj_data = raw_data
 
     # write metadata
     asset_metadata = get_asset_metadata(unadj_data[['symbol', 'date']], tickers_df)
@@ -230,7 +294,7 @@ def ingest_sharadar_daily(environ,
     unadj_data = unadj_data.reset_index()
 
     # write splits and dividends
-    splits = None # get_splits(actions_df, tickers_df)
+    splits = get_splits(actions_df, tickers_df)
     dividends = get_dividends(unadj_data, tickers_df)
     
     adjustment_writer.write(

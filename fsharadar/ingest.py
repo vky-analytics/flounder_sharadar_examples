@@ -1,3 +1,5 @@
+# Common auxiliary methods used in the bundle-specific ingest.py files
+
 import numpy as np
 import pandas as pd
 from six import iteritems
