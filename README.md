@@ -11,13 +11,8 @@ The application can be installed from basic conda with the following steps:
 
     conda create --name flounder python=3.6
     conda activate flounder
-    conda install -c anaconda contextlib2
-    conda install matplotlib
+    pip install cython fsharadar
     conda install jupyter
-    conda install -c Quantopian zipline
-    conda install cython
-    python setup.py build_ext --inplace
-
 
 Associated notebooks in this repository show how to ingest the Sharadar data into
 the Zipline data bundles and subsequently load them for running the Zipline pipeline.
