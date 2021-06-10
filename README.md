@@ -11,7 +11,9 @@ The application can be installed from basic conda with the following steps:
 
     conda create --name flounder python=3.6
     conda activate flounder
-    pip install cython fsharadar
+    conda install numpy
+    conda  install cython
+    pip install fsharadar
     conda install jupyter
 
 Associated notebooks in this repository show how to ingest the Sharadar data into
